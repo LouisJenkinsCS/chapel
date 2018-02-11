@@ -82,14 +82,20 @@
   Usage
   _____
 
-  To use :record:`DistBag`, the constructor must be invoked explicitly to
-  properly initialize the structure. Using the default state without initializing
-  will result in a halt.
+  To use :record:`DistBag`, the initializer :proc:`create` must be invoked explicitly to
+  properly initialize the structure; it is erroneous to use it without initializing and
+  will result in a halt. To dispose of the :record:`DistBag`, the deinitializer :proc:`destroy`
+  must also be invoked explicitly to avoid leaking memory; it is erroneous to use it after 
+  deinitializing and will result in a halt.
 
   .. code-block:: chapel
-
-    var bag = new DistBag(int, targetLocales=ourTargetLocales);
-
+    
+    // Declaration
+    var bag : DistBag(int);
+    // Initialization
+    bag.create(targetLocales = Locales);
+    // Deinitialization
+    bag.destroy();
 
   While the bag is safe to use in a distributed manner, each node always operates on it's privatized
   instance. This means that it is easy to add data in bulk, expecting it to be distributed, when in
@@ -101,6 +107,14 @@
 
     bag.addBulk(1..N);
     bag.balance();
+
+  .. note::
+
+    Any operation on the :record:`DistBag` must be performed on a node that it was distributed over.
+    This is because in the future, privatization may change to only create privatized copies on the
+    designated `targetLocales` and all operations are performed on the aforementioned privatized copies.
+    Consequently if the user were to call operations on a node not in the set of `targetLocales`
+    to be distributed over, they will be invisible to all other nodes during work-stealing.
 
   Planned Improvements
   ____________________
@@ -116,6 +130,8 @@
       and fast way of distributing memory, as currently 'excess' elements are shifted to a single
       node to be redistributed in the next pass. On the note, we need to collapse the pass for moving
       excess elements into a single pass, hopefully with a zero-copy overhead.
+  3.  Allow grouping or teams of nodes that cooperate together during work-stealing (maybe they can
+      exploit locality in the distance between groups of nodes). 
 
   Methods
   _______
@@ -199,21 +215,6 @@ module DistributedBag {
   config const distributedBagMaxBlockSize = 1024 * 1024;
 
   /*
-    Reference counter for DistributedBag
-  */
-  pragma "no doc"
-  class DistributedBagRC {
-    type eltType;
-    var _pid : int;
-
-    proc deinit() {
-      coforall loc in Locales do on loc {
-          delete chpl_getPrivatizedCopy(DistributedBagImpl(eltType), _pid);
-      }
-    }
-  }
-
-  /*
     A parallel-safe distributed multiset implementation that scales in terms of
     nodes, processors per node (PPN), and workload; The more PPN, the more segments
     we allocate to increase raw parallelism, and the larger the workload the better
@@ -224,32 +225,54 @@ module DistributedBag {
   record DistBag {
     type eltType;
 
+    // Privatized id
+    pragma "no doc"
+    var pid : int = -1;
+
     /*
-      The implementation of the Bag is forwarded. See :class:`DistributedBagImpl` for
-      documentation.
+      Initializes the bag and distributes it across all targetLocales; 
+      If the bag is already initialized it will halt. This must be called
+      from a node that the bag is distributed over.
     */
-    // This is unused, and merely for documentation purposes. See '_value'.
-    var _impl : DistributedBagImpl(eltType);
+    proc create(targetLocales = Locales) {
+      if isInitialized {
+        halt("DistBag is already initialized...");
+      }
 
-    // Privatized id...
-    pragma "no doc"
-    var _pid : int = -1;
+      var instance = new DistributedBagImpl(eltType, targetLocales = targetLocales); 
+      this.pid = instance.pid;
+    }
 
-    // Reference Counting...
-    pragma "no doc"
-    var _rc : Shared(DistributedBagRC(eltType));
+    /*
+      Determine where the bag was initialized with :proc:`create`.
+    */
+    inline proc isInitialized {
+      return pid != -1;
+    }
 
-    pragma "no doc"
-    proc DistBag(type eltType, targetLocales = Locales) {
-      _pid = (new DistributedBagImpl(eltType, targetLocales = targetLocales)).pid;
-      _rc = new Shared(new DistributedBagRC(eltType, _pid = _pid));
+    /*
+      Deinitializes the bag; if the bag is not initialized it will halt. 
+      This must be called from a node that the bag was distributed over.
+    */
+    proc destroy() {
+      if !isInitialized {
+        halt("DistBag is not initialized...");
+      }
+
+      var targetLocales = chpl_getPrivatizedCopy(DistributedBagImpl(eltType), pid).targetLocales;
+      coforall loc in targetLocales do on loc {
+          delete chpl_getPrivatizedCopy(DistributedBagImpl(eltType), pid);
+      }
+
+      pid = -1;
     }
 
     pragma "no doc"
     inline proc _value {
-      if _pid == -1 {
+      if !isInitialized {
         halt("DistBag is uninitialized...");
       }
+
       return chpl_getPrivatizedCopy(DistributedBagImpl(eltType), _pid);
     }
 
@@ -1102,7 +1125,7 @@ module DistributedBag {
                       return (hasElem, elem);
                     }
 
-                    if parentHandle.targetLocales.size == 1 {
+                    if parentHandle == nil || parentHandle.targetLocales.size == 1 {
                       segment.releaseStatus();
                       return (false, _defaultOf(eltType));
                     }
