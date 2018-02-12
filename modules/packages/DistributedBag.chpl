@@ -140,8 +140,6 @@
 module DistributedBag {
 
   use Collection;
-  use BlockDist;
-  use SharedObject;
 
   /*
     Below are segment statuses, which is a way to make visible to outsiders the
@@ -273,7 +271,7 @@ module DistributedBag {
         halt("DistBag is uninitialized...");
       }
 
-      return chpl_getPrivatizedCopy(DistributedBagImpl(eltType), _pid);
+      return chpl_getPrivatizedCopy(DistributedBagImpl(eltType), pid);
     }
 
     pragma "no doc"

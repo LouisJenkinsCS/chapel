@@ -168,7 +168,6 @@
 module DistributedDeque {
 
   use Collection;
-  use SharedObject;
 
   /*
     Size of each unroll block for each local deque node.
@@ -185,20 +184,6 @@ module DistributedDeque {
     LIFO
   }
 
-  pragma "no doc"
-  class DistributedDequeRC {
-    type eltType;
-    var _pid : int;
-
-    proc deinit() {
-      chpl_getPrivatizedCopy(DistributedDequeImpl(eltType), _pid).Destroy();
-      coforall loc in Locales do on loc {
-        delete chpl_getPrivatizedCopy(DistributedDequeImpl(eltType), _pid);
-      }
-
-    }
-  }
-
   /*
     A parallel-safe scalable distributed double-ended queue that supports both
     insertion and removal from either end of the queue. Can be used as a Queue,
@@ -206,31 +191,59 @@ module DistributedDeque {
   */
   record DistDeque {
     type eltType;
-    /*
-      The implementation of the Deque is forwarded. See :class:`DistributedDequeImpl` for
-      documentation.
-    */
-    // This is unused, and merely for documentation purposes. See '_value'.
-    var _impl : DistributedDequeImpl(eltType);
 
     // Privatization id
     pragma "no doc"
-    var _pid : int;
-    // Reference counting
-    pragma "no doc"
-    var _rc : Shared(DistributedDequeRC(eltType));
+    var pid : int;
 
-    proc DistDeque(type eltType, cap = -1, targetLocales = Locales) {
-      _pid = (new DistributedDequeImpl(eltType, cap, targetLocales)).pid;
-      _rc = new Shared(new DistributedDequeRC(eltType, _pid = _pid));
+    /*
+      Initializes the deque and distributes it across all targetLocales; 
+      If the bag is already initialized it will halt. This must be called
+      from a node that the bag is distributed over. The capacity of the
+      deque is determined by cap, and if left a negative number it will
+      be considered unbounded.
+    */
+    proc create(cap = -1, targetLocales = Locales) {
+      if isInitialized {
+        halt("DistDeque is already initialized...");
+      }
+
+      var newCap = if cap < 0 then -1 else cap;
+      var instance = new DistributedDequeImpl(eltType, newCap, targetLocales);
+      pid = instance.pid;
+    }
+
+    /*
+      Determine where the bag was initialized with :proc:`create`.
+    */
+    inline proc isInitialized {
+      return pid != -1;
+    }
+
+    /*
+      Deinitializes the deque; if the deque is not initialized it will halt. 
+      This must be called from a node that the deque was distributed over.
+    */
+    proc destroy() {
+      if !isInitialized {
+        halt("DistDeque is not initialized...");
+      }
+
+      chpl_getPrivatizedCopy(DistributedDequeImpl(eltType), pid).Destroy();
+      coforall loc in Locales do on loc {
+        delete chpl_getPrivatizedCopy(DistributedDequeImpl(eltType), pid);
+      }
+
+      pid = -1;
     }
 
     pragma "no doc"
     inline proc _value {
-      if _pid == -1 {
+      if !isInitialized {
         halt("DistDeque is uninitialized...");
       }
-      return chpl_getPrivatizedCopy(DistributedDequeImpl(eltType), _pid);
+      
+      return chpl_getPrivatizedCopy(DistributedDequeImpl(eltType), pid);
     }
 
     pragma "no doc"

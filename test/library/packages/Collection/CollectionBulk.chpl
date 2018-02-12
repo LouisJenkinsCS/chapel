@@ -10,26 +10,70 @@ config param isBag = false;
 
 config param nElems = 1000;
 
-var c = (
-  if isBoundedDeque then new DistDeque(int, cap=nElems)
-  else if isDeque then new DistDeque(int)
-  else if isBag then new DistBag(int)
-  else compilerError("Require 'isBoundedDeque', 'isDeque', or 'isBag' to be set...")
-);
+proc DistDequeTest() {
+	var deque : DistDeque(int);
+	deque.create();
 
-// Add Bulk Test
-// We simply add a range of elements.
-var range = (if isBoundedDeque then 1..nElems + 1 else 1..nElems);
-var successfulInsertions = c.addBulk(range);
-assert(successfulInsertions == nElems);
-assert(c.getSize() == nElems);
+	// Add Bulk Test
+	var successfulInsertions = deque.addBulk(1..nElems);
+	assert(successfulInsertions == nElems);
+	assert(deque.getSize() == nElems);
 
-// Remove Bulk Test
-// We simply remove the range of elements we added. 
-var iterations = 0;
-for elt in c.removeBulk(nElems) {
-	iterations += 1;
+	// Remove Bulk Test
+	var iterations = 0;
+	for elt in deque.removeBulk(nElems) {
+		iterations += 1;
+	}
+	assert(iterations == nElems);
+
+	deque.destroy();
+	writeln("SUCCESS");
 }
-assert(iterations == nElems);
 
-writeln("SUCCESS");
+proc BoundedDistDequeTest() {
+	var deque : DistDeque(int);
+	deque.create(cap = nElems);
+
+	// Add Bulk Test
+	// The additional element must be rejected
+	var successfulInsertions = deque.addBulk(1..nElems + 1);
+	assert(successfulInsertions == nElems);
+	assert(deque.getSize() == nElems);
+
+	// Remove Bulk Test
+	var iterations = 0;
+	for elt in deque.removeBulk(nElems) {
+		iterations += 1;
+	}
+	assert(iterations == nElems);
+
+	deque.destroy();
+	writeln("SUCCESS");
+}
+
+proc DistBagTest() {
+	var bag : DistBag(int);
+	bag.create();
+
+	// Add Bulk Test
+	// The additional element must be rejected
+	var successfulInsertions = bag.addBulk(1..nElems);
+	assert(successfulInsertions == nElems);
+	assert(bag.getSize() == nElems);
+
+	// Remove Bulk Test
+	var iterations = 0;
+	for elt in bag.removeBulk(nElems) {
+		iterations += 1;
+	}
+	assert(iterations == nElems);
+
+	bag.destroy();
+	writeln("SUCCESS");
+}
+
+
+if isBoundedDeque then BoundedDistDequeTest();
+else if isDeque then DistDequeTest();
+else if isBag then DistBagTest();
+else compilerError("Require 'isBoundedDeque', 'isDeque', or 'isBag' to be set...");
