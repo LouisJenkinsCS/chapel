@@ -34,9 +34,10 @@
 void chpl_memhook_check_pre(size_t number, size_t size,
                             chpl_mem_descInt_t description,
                             int32_t lineno, int32_t filename) {
-  if (!chpl_mem_inited())
+  if (!chpl_mem_inited()) {
     chpl_error("memory routine called before the memory layer is initialized",
                lineno, filename);
+  }
 
   if (number > 0 && size > SIZE_MAX/number)
     chpl_error("Attempting to allocate > max(size_t) bytes of memory",
