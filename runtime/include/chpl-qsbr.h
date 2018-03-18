@@ -61,7 +61,7 @@
   }
 */
 
-static const int CHPL_QSBR_ITERATIONS_PER_CHECKPOINT = 64;
+static const int CHPL_QSBR_ITERATIONS_PER_CHECKPOINT = 1024 * 1024;
 
 // Thread-specific meta data.
 struct tls_node {

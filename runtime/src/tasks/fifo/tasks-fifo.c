@@ -787,10 +787,6 @@ static __thread uint64_t nYields = 0;
 
 void chpl_task_yield(void)
 {
-  if (nYields++ % CHPL_QSBR_ITERATIONS_PER_CHECKPOINT == 0) {
-    chpl_qsbr_checkpoint();
-  }
-
   chpl_thread_yield();
 }
 
