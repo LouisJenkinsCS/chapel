@@ -79,19 +79,21 @@ struct defer_node {
   struct defer_node *next;
 };
 
-// Handle atomics for arbitrary objects
-typedef atomic_uintptr_t atomic_ptr;
+/*
+  // Handle atomics for arbitrary objects
+  typedef atomic_uintptr_t atomic_ptr;
 
-// Loads atomic value from ptr and cast to type
-#define CHPL_QSBR_ATOMIC_LOAD(type, ptr) \
-  ((type)(void *) atomic_load_uintptr_t(&ptr))
-#define CHPL_QSBR_ATOMIC_STORE(ptr, val) \
-  atomic_store_uintptr_t(&ptr, (uintptr_t)(void *) val)
-#define CHPL_QSBR_ATOMIC_COMPARE_EXCHANGE(ptr, expect, val) \
-  atomic_compare_exchange_strong_uintptr_t(&ptr, (uintptr_t)(void *) expect, (uintptr_t)(void *) val)
+  // Loads atomic value from ptr and cast to type
+  #define CHPL_QSBR_ATOMIC_LOAD(type, ptr) \
+    ((type)(void *) atomic_load_uintptr_t(&ptr))
+  #define CHPL_QSBR_ATOMIC_STORE(ptr, val) \
+    atomic_store_uintptr_t(&ptr, (uintptr_t)(void *) val)
+  #define CHPL_QSBR_ATOMIC_COMPARE_EXCHANGE(ptr, expect, val) \
+    atomic_compare_exchange_strong_uintptr_t(&ptr, (uintptr_t)(void *) expect, (uintptr_t)(void *) val)
+*/
 
 // List of thread-local data.
-atomic_ptr chpl_qsbr_tls_list;
+atomic_uintptr_t chpl_qsbr_tls_list;
 CHPL_TLS_DECL(struct tls_node *, chpl_qsbr_tls);
 int chpl_qsbr_is_enabled = -1;
 pthread_once_t chpl_qsbr_once_flag = PTHREAD_ONCE_INIT;
@@ -100,12 +102,23 @@ pthread_once_t chpl_qsbr_once_flag = PTHREAD_ONCE_INIT;
 // RMW operations, all loads of the list must also be atomic.
 static inline struct tls_node *get_tls_list(void);
 static inline struct tls_node *get_tls_list(void) {
-  #if CHPL_QSBR_CHECK
-  if (chpl_qsbr_tls_list == NULL) {
-    chpl_internal_error("'chpl_qsbr_tls_list' is NULL!\n");
-  }
-  #endif
-  return CHPL_QSBR_ATOMIC_LOAD(struct tls_node *, chpl_qsbr_tls_list);
+  return (struct tls_node *)(void *) atomic_load_uintptr_t(&chpl_qsbr_tls_list);
+}
+
+static inline struct tls_node *set_tls_list(struct tls_node *node) {
+  atomic_store_uintptr_t(&chpl_qsbr_tls_list, (uintptr_t)(void *) node);
+}
+
+static inline chpl_bool compare_exchange_tls_list(struct tls_node *expect, struct tls_node *val) {
+  atomic_compare_exchange_strong_uintptr_t(&chpl_qsbr_tls_list, (uintptr_t)(void *) expect, (uintptr_t)(void *) val);
+}
+
+static inline void append_tls_list(struct tls_node *node) {
+  struct tls_node *old_head;
+  do {
+    old_head = get_tls_list();
+    node->next = old_head;
+  } while (!compare_exchange_tls_list(old_head, node));
 }
 
 static inline uint64_t get_epoch(struct tls_node *node);
@@ -328,14 +341,7 @@ void chpl_qsbr_init_tls(void);
 void chpl_qsbr_init_tls(void) {
   struct tls_node *node = chpl_mem_calloc(1, sizeof(struct tls_node), CHPL_RT_MD_QSBR, 0, 0);
   node->epoch = get_global_epoch();
-
-  // Append to head of list
-  struct tls_node *old_head;
-  do {
-    old_head = CHPL_QSBR_ATOMIC_LOAD(struct tls_node *, chpl_qsbr_tls_list);
-    node->next = old_head;
-  } while (!CHPL_QSBR_ATOMIC_COMPARE_EXCHANGE(chpl_qsbr_tls_list, old_head, node));
-
+  append_tls_list(node);
   CHPL_TLS_SET(chpl_qsbr_tls, node);
 }
 
@@ -583,8 +589,8 @@ void chpl_qsbr_exit(void) {
 
     // Clean thread-local storage
     while (chpl_qsbr_tls_list) {
-        struct tls_node *node = CHPL_QSBR_ATOMIC_LOAD(struct tls_node *, chpl_qsbr_tls_list);
-        CHPL_QSBR_ATOMIC_STORE(chpl_qsbr_tls_list, node->next);
+        struct tls_node *node = get_tls_list();
+        set_tls_list(node->next);
 
         while (node->deferList) {
             struct defer_node *dnode = node->deferList;
