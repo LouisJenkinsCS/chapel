@@ -79,10 +79,19 @@ struct defer_node {
   struct defer_node *next;
 };
 
+// Handle atomics for arbitrary objects
+typedef atomic_uintptr_t atomic_ptr;
 
+// Loads atomic value from ptr and cast to type
+#define CHPL_QSBR_ATOMIC_LOAD(type, ptr) \
+  ((type)(void *) atomic_load_uintptr_t(&ptr))
+#define CHPL_QSBR_ATOMIC_STORE(ptr, val) \
+  atomic_store_uintptr_t(&ptr, (uintptr_t)(void *) val)
+#define CHPL_QSBR_ATOMIC_COMPARE_EXCHANGE(ptr, expect, val) \
+  atomic_compare_exchange_strong_uintptr_t(&ptr, (uintptr_t)(void *) expect, (uintptr_t)(void *) val)
 
 // List of thread-local data.
-struct tls_node *chpl_qsbr_tls_list;
+atomic_ptr chpl_qsbr_tls_list;
 CHPL_TLS_DECL(struct tls_node *, chpl_qsbr_tls);
 int chpl_qsbr_is_enabled = -1;
 pthread_once_t chpl_qsbr_once_flag = PTHREAD_ONCE_INIT;
@@ -96,7 +105,7 @@ static inline struct tls_node *get_tls_list(void) {
     chpl_internal_error("'chpl_qsbr_tls_list' is NULL!\n");
   }
   #endif
-  return (struct tls_node *) atomic_load_uintptr_t((uintptr_t *) &chpl_qsbr_tls_list);
+  return CHPL_QSBR_ATOMIC_LOAD(struct tls_node *, chpl_qsbr_tls_list);
 }
 
 static inline uint64_t get_epoch(struct tls_node *node);
@@ -323,11 +332,9 @@ void chpl_qsbr_init_tls(void) {
   // Append to head of list
   struct tls_node *old_head;
   do {
-    old_head = chpl_qsbr_tls_list;
+    old_head = CHPL_QSBR_ATOMIC_LOAD(struct tls_node *, chpl_qsbr_tls_list);
     node->next = old_head;
-  } while (!atomic_compare_exchange_weak_uintptr_t(
-      (uintptr_t *) &chpl_qsbr_tls_list, (uintptr_t) old_head, (uintptr_t) node)
-    );
+  } while (!CHPL_QSBR_ATOMIC_COMPARE_EXCHANGE(chpl_qsbr_tls_list, old_head, node));
 
   CHPL_TLS_SET(chpl_qsbr_tls, node);
 }
@@ -576,8 +583,8 @@ void chpl_qsbr_exit(void) {
 
     // Clean thread-local storage
     while (chpl_qsbr_tls_list) {
-        struct tls_node *node = chpl_qsbr_tls_list;
-        chpl_qsbr_tls_list = chpl_qsbr_tls_list->next;
+        struct tls_node *node = CHPL_QSBR_ATOMIC_LOAD(struct tls_node *, chpl_qsbr_tls_list);
+        CHPL_QSBR_ATOMIC_STORE(chpl_qsbr_tls_list, node->next);
 
         while (node->deferList) {
             struct defer_node *dnode = node->deferList;
